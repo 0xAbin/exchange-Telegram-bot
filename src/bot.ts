@@ -21,6 +21,11 @@ let userExpectingKey = new Set<number>();
 let userReadyToTrade = new Set<number>();
 let userSelectedCoin = new Map<number, string>();
 
+function createTradeButtons() {
+  const tradeTokens = TradeTokens[MOVEMENT_DEVNET];
+  return tradeTokens.map(token => [{ text: `Trade ${token.symbol}`, callback_data: `trade_${token.symbol}` }]);
+}
+
 // Handler for /start command
 bot.start((ctx) => {
   const chatId = ctx.chat?.id;
@@ -72,7 +77,7 @@ bot.on("text", async (ctx) => {
           "🔑 **Private Key Received!**\n\n" +
           "✨ Your account details:\n" +
           `📬 Address: ${account.address}\n\n` +
-          "Please select a coin to trade:",
+          "Please select a coin to claim:",
           {
             reply_markup: {
               inline_keyboard: coinButtons
@@ -89,12 +94,6 @@ bot.on("text", async (ctx) => {
       await ctx.reply(
         '🚫 The private key should start with "0x" and be exactly 64 characters long (including "0x"). Please provide a valid private key.'
       );
-    }
-  } else if (userReadyToTrade.has(chatId)) {
-    if (text.toLowerCase() === "trade") {
-      await handleTrade(ctx, chatId);
-    } else {
-      await ctx.reply("🚫 Invalid command. Please click the 'Start Trading' button to proceed.");
     }
   }
 });
@@ -115,18 +114,11 @@ bot.on("callback_query", async (ctx: Context) => {
     userSelectedCoin.set(chatId, selectedCoin);
     userReadyToTrade.add(chatId);
     await ctx.answerCbQuery(`You selected ${selectedCoin}`);
-    await ctx.reply(
-      `You've selected ${selectedCoin}. Ready to trade!`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "Start Trading", callback_data: "trade" }]
-          ]
-        }
-      }
-    );
-  } else if (data === "trade") {
     await handleTrade(ctx, chatId);
+  } else if (data.startsWith("trade_")) {
+    const selectedTradeCoin = data.split("_")[1];
+    await ctx.answerCbQuery(`You selected to trade ${selectedTradeCoin}`);
+    await executeTrade(ctx, chatId, selectedTradeCoin);
   }
 });
 
@@ -192,6 +184,7 @@ async function handleTrade(ctx: Context, chatId: number) {
 
       if (currentBalanceInTokens >= claimAmountInTokens) {
         await ctx.reply("💰 Your wallet already has sufficient tokens. No need to claim more.");
+        await approveAllowance(ctx, chatId, ClaimToken);
         return;
       }
     } else {
@@ -260,6 +253,8 @@ async function handleTrade(ctx: Context, chatId: number) {
         `🚀`
       );
       
+      await approveAllowance(ctx, chatId, ClaimToken);
+      
     } catch (error: any) {
       // Edit the loading message to indicate failure
       await ctx.telegram.editMessageText(
@@ -275,103 +270,120 @@ async function handleTrade(ctx: Context, chatId: number) {
       );
       console.error(`Error processing faucet claim: ${error.message}`);
     }
+  } catch (error: any) {
+    await ctx.reply(
+      "❌ Error processing trade.\n\n" +
+      "We apologize for the inconvenience. Our team has been notified.\n" +
+      "Please try again later or contact support if the issue persists."
+    );
+    console.error(`Error processing trade: ${error.message}`);
+  }
+}
 
-    try {
-      await ctx.reply(`🪙 Preparing to approve ${ClaimToken.symbol} to be spent by the contract...`);
+async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
+  try {
+    await ctx.reply(`🪙 Preparing to approve ${ClaimToken.symbol} to be spent by the contract...`);
 
-      const syntheticsRouterAddress = getContracts[MOVEMENT_DEVNET].SyntheticsRouter;
-      const tokenContract = new ethers.Contract(ClaimToken.address, tokenabi, wallet);
+    const wallet = new ethers.Wallet(userPrivateKeys.get(chatId)!, ethersprovider);
+    const syntheticsRouterAddress = getContracts[MOVEMENT_DEVNET].SyntheticsRouter;
+    const tokenContract = new ethers.Contract(ClaimToken.address, tokenabi, wallet);
 
-      const currentAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
+    const currentAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
 
-      if (currentAllowance >= 1000000n) {
-        await ctx.reply("✅ Maximum allowance already granted. Skipping approval.");
-        return;
-      }
-
-      // Send transaction to approve allowance
-      const approvalAmount = ethers.MaxUint256; // Adjust the amount as needed
-      const tx = await tokenContract.approve(syntheticsRouterAddress, approvalAmount);
-
-      await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
-
-      const startTime = Date.now();
-      let txReceipt;
-      let dots = '';
-
-      while (!txReceipt) {
-        try {
-          txReceipt = await tx.wait();
-        } catch (error) {
-          const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-          dots = '.'.repeat((elapsedTime % 3) + 1);
-
-          await ctx.telegram.editMessageText(
-            chatId,
-            loadingMessage.message_id,
-            undefined,
-            `⏳ Waiting for response${dots}\n` +
-            `Time elapsed: ${elapsedTime}s\n` +
-            `(Chain may be slow, please be patient)`
-          );
-
-          if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-            await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
-          }
-
-          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-        }
-      }
-
-      // Edit the loading message to indicate success
-      await ctx.telegram.editMessageText(
-        chatId,
-        loadingMessage.message_id,
-        undefined,
-        `✅ Allowance approved successfully for ${ClaimToken.symbol}.`
-      );
-
-      const updatedAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
-
-      await ctx.reply(
-        `🎉 Allowance updated!\n\n` +
-        `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
-        `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
-        `🚀`
-      );
-      
-    } catch (error: any) {
-      await ctx.reply("❌ Error processing allowance approval. Please try again later.");
-      console.error(`Error processing allowance approval: ${error.message}`);
+    if (currentAllowance >= 1000000n) {
+      await ctx.reply("✅ Maximum allowance already granted. Ready to trade.");
+      await showTradeOptions(ctx, chatId);
+      return;
     }
 
-    // Trade Finale 
-    try {
-      await ctx.reply("🔄 Multicalling trades ");
+    // Send transaction to approve allowance
+    const approvalAmount = ethers.MaxUint256; // Adjust the amount as needed
+    const tx = await tokenContract.approve(syntheticsRouterAddress, approvalAmount);
 
+    await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
+
+    const startTime = Date.now();
+    let txReceipt;
+    let dots = '';
+
+    while (!txReceipt) {
+      try {
+        txReceipt = await tx.wait();
+      } catch (error) {
+        const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+        dots = '.'.repeat((elapsedTime % 3) + 1);
+
+        await ctx.reply(
+          `⏳ Waiting for response${dots}\n` +
+          `Time elapsed: ${elapsedTime}s\n` +
+          `(Chain may be slow, please be patient)`
+        );
+
+        if (elapsedTime > 80 && elapsedTime % 20 === 0) {
+          await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+      }
+    }
+
+    await ctx.reply(`✅ Allowance approved successfully for ${ClaimToken.symbol}.`);
+
+    const updatedAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
+
+    await ctx.reply(
+      `🎉 Allowance updated!\n\n` +
+      `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
+      `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
+      `🚀`
+    );
+
+    await showTradeOptions(ctx, chatId);
+    
+  } catch (error: any) {
+    await ctx.reply("❌ Error processing allowance approval. Please try again later.");
+    console.error(`Error processing allowance approval: ${error.message}`);
+  }
+}
+
+async function showTradeOptions(ctx: Context, chatId: number) {
+  await ctx.reply(
+    "🔥 Ready to trade! Select a token to trade:",
+    {
+      reply_markup: {
+        inline_keyboard: createTradeButtons()
+      }
+    }
+  );
+}
+
+async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) {
+    try {
+      await ctx.reply(`🔄 Preparing to trade ${selectedCoin}...`);
+  
+      const wallet = new ethers.Wallet(userPrivateKeys.get(chatId)!, ethersprovider);
+      const gettokensTokennew = TradeTokens[MOVEMENT_DEVNET];
+      const TradeTokensnew = gettokensTokennew.find((token) => token.symbol === selectedCoin);
+  
+      if (!TradeTokensnew) {
+        throw new Error(`Trade token for ${selectedCoin} not found.`);
+      }
+  
       const prices = await fetchTokenPrices();
       const processedData = processPrices(prices);
       const primaryPrices = processedData.primaryPrices;
       const primaryTokens = processedData.primaryTokens;
-
-      // Get price for token
-      const gettokensTokennew = TradeTokens[MOVEMENT_DEVNET];
-      const TradeTokensnew = gettokensTokennew.find((token) => token.symbol === selectedCoin);
-
-      if (!TradeTokensnew) {
-        throw new Error(`Trade token for ${selectedCoin} not found.`);
-      }
-
+  
       const apiPrice = await getPriceForTokenAddress(TradeTokensnew.address);
       const numberApiPrice = BigInt(apiPrice || "0");
-
+  
       if (!apiPrice) {
         throw new Error(`Max price for token address ${TradeTokensnew.address} not found.`);
       }
     
       const singleMarketOrderHandler = getContracts[MOVEMENT_DEVNET].SingleMarketExchangeRouter;
       const tokenContract = new ethers.Contract(singleMarketOrderHandler, singleMarketAbi, wallet);
-
+  
       // Data for trade
       const orderVault = getContracts[MOVEMENT_DEVNET].OrderVault;
       const newCollateral = 5000000n;
@@ -380,11 +392,11 @@ async function handleTrade(ctx: Context, chatId: number) {
       const collvstradeamount = tradeAmount * collateral;
       const expndedDecimals = expandDecimals(collvstradeamount, 30);
       const receiver = wallet.address;
-
+  
       // Params data
       const sendWnt = { method: "sendWnt", params: [orderVault, 0n] };
       const sendTokens = { method: "sendTokens", params: [TradeTokensnew.address, orderVault, newCollateral] };
-
+  
       const orderParams = {
         addresses: {
           receiver: receiver as Address,
@@ -409,63 +421,54 @@ async function handleTrade(ctx: Context, chatId: number) {
         shouldUnwrapNativeToken: false,
         referralCode: referralCodeDecimals
       };
-
+  
       const pricesParams = {
         primaryTokens: primaryTokens,
         primaryPrices: primaryPrices
       };
-
+  
       const simulateCreateSingleMarketOrder = { method: "simulateCreateSingleMarketOrder", params: [orderParams, pricesParams] };
-
+  
       const multicall = [sendWnt, sendTokens, simulateCreateSingleMarketOrder];
       const encodedPayload = multicall.filter(Boolean).map((call) => tokenContract.interface.encodeFunctionData(call!.method, call!.params));
-
+  
       await ctx.reply("🔄 Multicalling Data loaded");
-
+  
       await sleep(500);
-
+  
       try {
         const tx = await tokenContract.multicall(encodedPayload);
-
+  
         // Handle multicall transaction status
         const startTime = Date.now();
         let txReceipt;
         let dots = '';
-
+  
         while (!txReceipt) {
           try {
             txReceipt = await tx.wait();
           } catch (error) {
             const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
             dots = '.'.repeat((elapsedTime % 3) + 1);
-
-            await ctx.telegram.editMessageText(
-              chatId,
-              loadingMessage.message_id,
-              undefined,
+  
+            await ctx.reply(
               `⏳ Waiting for response${dots}\n` +
               `Time elapsed: ${elapsedTime}s\n` +
               `(Chain may be slow, please be patient)`
             );
-
+  
             if (elapsedTime > 80 && elapsedTime % 20 === 0) {
               await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
             }
-
+  
             await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
           }
         }
-
-        // Edit the loading message to indicate success
-        await ctx.telegram.editMessageText(
-          chatId,
-          loadingMessage.message_id,
-          undefined,
-          "✅ Multicall transaction confirmed! Trades executed successfully!"
-        );
-
+  
+        await ctx.reply("✅ Multicall transaction confirmed! Trades executed successfully!");
+  
         // Optionally, you can fetch and show the updated trade results or balances here
-
+  
       } catch (error: any) {
         // Handle multicall failure
         await ctx.reply("❌ Error executing multicall. Please try again later.");
@@ -476,20 +479,11 @@ async function handleTrade(ctx: Context, chatId: number) {
       await ctx.reply("❌ Error Executing Trade. Please try again later.");
       console.error(`Error processing trade: ${error.message}`);
     }
-
-  } catch (error: any) {
-    await ctx.reply(
-      "❌ Error processing trade.\n\n" +
-      "We apologize for the inconvenience. Our team has been notified.\n" +
-      "Please try again later or contact support if the issue persists."
-    );
-    console.error(`Error processing trade: ${error.message}`);
   }
-}
-
-bot.launch().then(() => {
-  console.log("Bot is up and running");
-});
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  
+  bot.launch().then(() => {
+    console.log("Bot is up and running");
+  });
+  
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
