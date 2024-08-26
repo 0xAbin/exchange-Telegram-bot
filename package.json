@@ -1,0 +1,30 @@
+{
+  "name": "exchange-Telegram-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node dist/bot.js",
+    "dev": "ts-node src/bot.ts"
+  },
+  "keywords": [],
+  "author": "0xabin",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.5",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2",
+    "input": "^1.0.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "telegraf": "^4.16.3",
+    "telegram": "^2.24.11",
+    "viem": "^2.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}
