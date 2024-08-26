@@ -59,7 +59,7 @@ export const TradeTokens ={
             symbol: "MILKTIA",
             decimals: 18,
             claimable: 20,
-            tradeble : 5,
+            tradeble : 1,
         },
         {
             name: "Staked Move",
@@ -75,7 +75,7 @@ export const TradeTokens ={
             symbol: "GGAVAX",
             decimals: 18,
             claimable: 10,
-            tradeble : 5,
+            tradeble : 2,
         },
     ]
 }
@@ -128,3 +128,47 @@ export function expandDecimals(n: BigNumberish, decimals: number): bigint {
   }
 
   export const referralCodeDecimals = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+
+
+
+  export const fetchMarketData = async () => {
+    try {
+      const response = await axios.get('https://api.data.avituslabs.xyz/marketdata');
+      return response.data.data;
+    } catch (error: any) {
+      console.error(`Error fetching market data: ${error.message}`);
+      throw error;
+    }
+  };
+  
+  interface MarketDataEntry {
+    marketTokenAddress: string;
+    longTokenAddress: string;
+    shortTokenAddress: string;
+    indexTokenAddress: string;
+    isSpotOnly: boolean;
+    isDynamic: boolean;
+    isSameCollaterals: boolean;
+    name: string;
+    data: string;
+  }
+  
+  export const getMarketTokenAddress = async (selectedTokenAddress: string) => {
+    try {
+      const marketData = await fetchMarketData();
+  
+      for (const [key, value] of Object.entries(marketData)) {
+        const marketEntry = value as MarketDataEntry;
+  
+        if (marketEntry.indexTokenAddress.toLowerCase() === selectedTokenAddress.toLowerCase()) {
+          return marketEntry.marketTokenAddress;
+        }
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error(`Error getting market token address: ${error.message}`);
+      throw error;
+    }
+  };

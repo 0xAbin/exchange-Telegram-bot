@@ -1,8 +1,24 @@
 import { Telegraf, Context } from "telegraf";
 import { ethers, formatUnits } from "ethers";
 import dotenv from "dotenv";
-import { calculateClaimAmount, checkAllowance, formatBalance, getBalance, getPriceForTokenAddress } from "./utils/getbalance";
-import { expandDecimals, FacuetTestToken, fetchTokenPrices, processPrices, referralCodeDecimals, TRadeMarket, TradeTokens, uiFees } from "./lib/token";
+import {
+  calculateClaimAmount,
+  checkAllowance,
+  formatBalance,
+  getBalance,
+  getPriceForTokenAddress,
+} from "./utils/getbalance";
+import {
+  expandDecimals,
+  FacuetTestToken,
+  fetchTokenPrices,
+  getMarketTokenAddress,
+  processPrices,
+  referralCodeDecimals,
+  TRadeMarket,
+  TradeTokens,
+  uiFees,
+} from "./lib/token";
 import { MOVEMENT_DEVNET } from "./utils/chains";
 import { ethersprovider, publicClient } from "./utils/providers";
 import { Address } from "viem";
@@ -23,7 +39,9 @@ let userSelectedCoin = new Map<number, string>();
 
 function createTradeButtons() {
   const tradeTokens = TradeTokens[MOVEMENT_DEVNET];
-  return tradeTokens.map(token => [{ text: `Trade ${token.symbol}`, callback_data: `trade_${token.symbol}` }]);
+  return tradeTokens.map((token) => [
+    { text: `Trade ${token.symbol}`, callback_data: `trade_${token.symbol}` },
+  ]);
 }
 
 // Handler for /start command
@@ -70,24 +88,30 @@ bot.on("text", async (ctx) => {
 
         userPrivateKeys.set(chatId, privateKey);
 
-        const availableCoins = FacuetTestToken[MOVEMENT_DEVNET].map(token => token.symbol);
-        const coinButtons = availableCoins.map(coin => [{ text: coin, callback_data: `select_coin_${coin}` }]);
+        const availableCoins = FacuetTestToken[MOVEMENT_DEVNET].map(
+          (token) => token.symbol
+        );
+        const coinButtons = availableCoins.map((coin) => [
+          { text: coin, callback_data: `select_coin_${coin}` },
+        ]);
 
         await ctx.reply(
           "🔑 **Private Key Received!**\n\n" +
-          "✨ Your account details:\n" +
-          `📬 Address: ${account.address}\n\n` +
-          "Please select a coin to claim:",
+            "✨ Your account details:\n" +
+            `📬 Address: ${account.address}\n\n` +
+            "Please select a coin to claim:",
           {
             reply_markup: {
-              inline_keyboard: coinButtons
-            }
+              inline_keyboard: coinButtons,
+            },
           }
         );
 
         userExpectingKey.delete(chatId);
       } catch (error: any) {
-        await ctx.reply("❌ The private key you provided is invalid. Please ensure it's a valid Ethereum private key and try again.");
+        await ctx.reply(
+          "❌ The private key you provided is invalid. Please ensure it's a valid Ethereum private key and try again."
+        );
         console.error(`Error converting private key: ${error.message}`);
       }
     } else {
@@ -160,15 +184,24 @@ async function handleTrade(ctx: Context, chatId: number) {
     const ClaimToken = tokens.find((token) => token.symbol === selectedCoin);
 
     if (!ClaimToken) {
-      await ctx.reply(`❌ ClaimToken for ${selectedCoin} not found. Please contact support`);
+      await ctx.reply(
+        `❌ ClaimToken for ${selectedCoin} not found. Please contact support`
+      );
       return;
     }
 
     const claimableAmount = ClaimToken.claimable;
-    const tokenAmount = calculateClaimAmount(claimableAmount, ClaimToken.decimals);
+    const tokenAmount = calculateClaimAmount(
+      claimableAmount,
+      ClaimToken.decimals
+    );
 
     const faucetContractAddress = getContracts[MOVEMENT_DEVNET].FaucetVault;
-    const faucetContract = new ethers.Contract(faucetContractAddress, facuetAbi, wallet);
+    const faucetContract = new ethers.Contract(
+      faucetContractAddress,
+      facuetAbi,
+      wallet
+    );
 
     const currentBalance = await publicClient.readContract({
       address: ClaimToken.address as Address,
@@ -177,57 +210,74 @@ async function handleTrade(ctx: Context, chatId: number) {
       args: [wallet.address],
     });
 
-    if (typeof currentBalance === 'bigint') {
+    if (typeof currentBalance === "bigint") {
       const currentBalanceValue = currentBalance as bigint;
-      const currentBalanceInTokens = parseFloat(formatUnits(currentBalanceValue, ClaimToken.decimals));
-      const claimAmountInTokens = parseFloat(formatUnits(tokenAmount, ClaimToken.decimals));
+      const currentBalanceInTokens = parseFloat(
+        formatUnits(currentBalanceValue, ClaimToken.decimals)
+      );
+      const claimAmountInTokens = parseFloat(
+        formatUnits(tokenAmount, ClaimToken.decimals)
+      );
 
       if (currentBalanceInTokens >= claimAmountInTokens) {
-        await ctx.reply("💰 Your wallet already has sufficient tokens. No need to claim more.");
+        await ctx.reply(
+          "💰 Your wallet already has sufficient tokens. No need to claim more."
+        );
         await approveAllowance(ctx, chatId, ClaimToken);
         return;
       }
     } else {
-      await ctx.reply("❌ Error fetching current balance. Please try again later.");
+      await ctx.reply(
+        "❌ Error fetching current balance. Please try again later."
+      );
       return;
     }
 
     // Notify user that the process has started
-    const loadingMessage = await ctx.reply("🔄 Claiming your tokens...\nPlease wait...");
+    const loadingMessage = await ctx.reply(
+      "🔄 Claiming your tokens...\nPlease wait..."
+    );
 
     try {
-      await ctx.reply(`🪙 Preparing to claim ${ClaimToken.symbol} from Avtius faucet...`);
+      await ctx.reply(
+        `🪙 Preparing to claim ${ClaimToken.symbol} from Avtius faucet...`
+      );
 
       // Send transaction
-      const tx = await faucetContract.claimTokens(ClaimToken.address, tokenAmount);
+      const tx = await faucetContract.claimTokens(
+        ClaimToken.address,
+        tokenAmount
+      );
 
       await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
 
       const startTime = Date.now();
       let txReceipt;
-      let dots = '';
+      let dots = "";
 
       while (!txReceipt) {
         try {
           txReceipt = await tx.wait();
         } catch (error) {
           const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-          dots = '.'.repeat((elapsedTime % 3) + 1);
+          dots = ".".repeat((elapsedTime % 3) + 1);
 
           await ctx.telegram.editMessageText(
             chatId,
             loadingMessage.message_id,
             undefined,
             `⏳ Waiting for response${dots}\n` +
-            `Time elapsed: ${elapsedTime}s\n` +
-            `(Chain may be slow, please be patient)`
+              `Time elapsed: ${elapsedTime}s\n` +
+              `(Chain may be slow, please be patient)`
           );
 
           if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-            await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
+            await ctx.reply(
+              "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
+            );
           }
 
-          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
         }
       }
 
@@ -236,7 +286,9 @@ async function handleTrade(ctx: Context, chatId: number) {
         chatId,
         loadingMessage.message_id,
         undefined,
-        "✅ Transaction confirmed! Successfully claimed " + ClaimToken.symbol + " from Avtius faucet!"
+        "✅ Transaction confirmed! Successfully claimed " +
+          ClaimToken.symbol +
+          " from Avtius faucet!"
       );
 
       const getBalanceClaimed = await publicClient.readContract({
@@ -248,13 +300,14 @@ async function handleTrade(ctx: Context, chatId: number) {
 
       await ctx.reply(
         `🎉 Claim successful!\n\n` +
-        `🔍 Your new ${ClaimToken.symbol} balance:\n` +
-        `${formatBalance(getBalanceClaimed as bigint, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
-        `🚀`
+          `🔍 Your new ${ClaimToken.symbol} balance:\n` +
+          `${formatBalance(getBalanceClaimed as bigint, ClaimToken.decimals)} ${
+            ClaimToken.symbol
+          }\n\n` +
+          `🚀`
       );
-      
+
       await approveAllowance(ctx, chatId, ClaimToken);
-      
     } catch (error: any) {
       // Edit the loading message to indicate failure
       await ctx.telegram.editMessageText(
@@ -262,19 +315,19 @@ async function handleTrade(ctx: Context, chatId: number) {
         loadingMessage.message_id,
         undefined,
         "❌ Error processing faucet claim.\n\n" +
-        "Possible reasons:\n" +
-        "- Network congestion\n" +
-        "- Insufficient gas\n" +
-        "- Contract error\n\n" +
-        "Please try again later or contact support if the issue persists."
+          "Possible reasons:\n" +
+          "- Network congestion\n" +
+          "- Insufficient gas\n" +
+          "- Contract error\n\n" +
+          "Please try again later or contact support if the issue persists."
       );
       console.error(`Error processing faucet claim: ${error.message}`);
     }
   } catch (error: any) {
     await ctx.reply(
       "❌ Error processing trade.\n\n" +
-      "We apologize for the inconvenience. Our team has been notified.\n" +
-      "Please try again later or contact support if the issue persists."
+        "We apologize for the inconvenience. Our team has been notified.\n" +
+        "Please try again later or contact support if the issue persists."
     );
     console.error(`Error processing trade: ${error.message}`);
   }
@@ -282,13 +335,27 @@ async function handleTrade(ctx: Context, chatId: number) {
 
 async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
   try {
-    await ctx.reply(`🪙 Preparing to approve ${ClaimToken.symbol} to be spent by the contract...`);
+    await ctx.reply(
+      `🪙 Preparing to approve ${ClaimToken.symbol} to be spent by the contract...`
+    );
 
-    const wallet = new ethers.Wallet(userPrivateKeys.get(chatId)!, ethersprovider);
-    const syntheticsRouterAddress = getContracts[MOVEMENT_DEVNET].SyntheticsRouter;
-    const tokenContract = new ethers.Contract(ClaimToken.address, tokenabi, wallet);
+    const wallet = new ethers.Wallet(
+      userPrivateKeys.get(chatId)!,
+      ethersprovider
+    );
+    const syntheticsRouterAddress =
+      getContracts[MOVEMENT_DEVNET].SyntheticsRouter;
+    const tokenContract = new ethers.Contract(
+      ClaimToken.address,
+      tokenabi,
+      wallet
+    );
 
-    const currentAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
+    const currentAllowance = await checkAllowance(
+      tokenContract,
+      wallet.address,
+      syntheticsRouterAddress
+    );
 
     if (currentAllowance >= 1000000n) {
       await ctx.reply("✅ Maximum allowance already granted. Ready to trade.");
@@ -298,192 +365,257 @@ async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
 
     // Send transaction to approve allowance
     const approvalAmount = ethers.MaxUint256; // Adjust the amount as needed
-    const tx = await tokenContract.approve(syntheticsRouterAddress, approvalAmount);
+    const tx = await tokenContract.approve(
+      syntheticsRouterAddress,
+      approvalAmount
+    );
 
     await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
 
     const startTime = Date.now();
     let txReceipt;
-    let dots = '';
+    let dots = "";
 
     while (!txReceipt) {
       try {
         txReceipt = await tx.wait();
       } catch (error) {
         const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-        dots = '.'.repeat((elapsedTime % 3) + 1);
+        dots = ".".repeat((elapsedTime % 3) + 1);
 
         await ctx.reply(
           `⏳ Waiting for response${dots}\n` +
-          `Time elapsed: ${elapsedTime}s\n` +
-          `(Chain may be slow, please be patient)`
+            `Time elapsed: ${elapsedTime}s\n` +
+            `(Chain may be slow, please be patient)`
         );
 
         if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-          await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
+          await ctx.reply(
+            "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
+          );
         }
 
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+        await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
       }
     }
 
-    await ctx.reply(`✅ Allowance approved successfully for ${ClaimToken.symbol}.`);
+    await ctx.reply(
+      `✅ Allowance approved successfully for ${ClaimToken.symbol}.`
+    );
 
-    const updatedAllowance = await checkAllowance(tokenContract, wallet.address, syntheticsRouterAddress);
+    const updatedAllowance = await checkAllowance(
+      tokenContract,
+      wallet.address,
+      syntheticsRouterAddress
+    );
 
     await ctx.reply(
       `🎉 Allowance updated!\n\n` +
-      `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
-      `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
-      `🚀`
+        `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
+        `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${
+          ClaimToken.symbol
+        }\n\n` +
+        `🚀`
     );
 
     await showTradeOptions(ctx, chatId);
-    
   } catch (error: any) {
-    await ctx.reply("❌ Error processing allowance approval. Please try again later.");
+    await ctx.reply(
+      "❌ Error processing allowance approval. Please try again later."
+    );
     console.error(`Error processing allowance approval: ${error.message}`);
   }
 }
 
 async function showTradeOptions(ctx: Context, chatId: number) {
-  await ctx.reply(
-    "🔥 Ready to trade! Select a token to trade:",
-    {
-      reply_markup: {
-        inline_keyboard: createTradeButtons()
-      }
-    }
-  );
+  await ctx.reply("🔥 Ready to trade! Select a token to trade:", {
+    reply_markup: {
+      inline_keyboard: createTradeButtons(),
+    },
+  });
 }
 
-async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) {
+async function executeTrade(
+  ctx: Context,
+  chatId: number,
+  selectedCoin: string
+) {
+  try {
+    await ctx.reply(`🔄 Preparing to trade ${selectedCoin}...`);
+
+    const wallet = new ethers.Wallet(
+      userPrivateKeys.get(chatId)!,
+      ethersprovider
+    );
+    const TradeTokensnew = TradeTokens[MOVEMENT_DEVNET].find(
+      (token) => token.symbol === selectedCoin
+    );
+
+    if (!TradeTokensnew) {
+      throw new Error(`Trade token for ${selectedCoin} not found.`);
+    }
+
+    const marketTokenAddress = await getMarketTokenAddress(
+      TradeTokensnew.address
+    );
+
+    if (!marketTokenAddress) {
+      await ctx.reply(`❌ Market for ${selectedCoin} not found.`);
+      return;
+    }
+
+    const prices = await fetchTokenPrices();
+    const processedData = processPrices(prices);
+    const primaryPrices = processedData.primaryPrices;
+    const primaryTokens = processedData.primaryTokens;
+
+    const apiPrice = await getPriceForTokenAddress(TradeTokensnew.address);
+    const numberApiPrice = BigInt(apiPrice || "0");
+
+    if (!apiPrice) {
+      throw new Error(
+        `Max price for token address ${TradeTokensnew.address} not found.`
+      );
+    }
+
+    const singleMarketOrderHandler =
+      getContracts[MOVEMENT_DEVNET].SingleMarketExchangeRouter;
+    const tokenContract = new ethers.Contract(
+      singleMarketOrderHandler,
+      singleMarketAbi,
+      wallet
+    );
+
+    // Data for trade
+    const orderVault = getContracts[MOVEMENT_DEVNET].OrderVault;
+    const newCollateral = 5000000n;
+    const tradeAmount = TradeTokensnew.tradeble;
+    const collateral = 5;
+    const collvstradeamount = tradeAmount * collateral;
+    const expndedDecimals = expandDecimals(collvstradeamount, 30);
+    const receiver = wallet.address;
+
+    // Params data
+    const sendWnt = { method: "sendWnt", params: [orderVault, 0n] };
+    const sendTokens = {
+      method: "sendTokens",
+      params: [TradeTokensnew.address, orderVault, newCollateral],
+    };
+
+    const orderParams = {
+      addresses: {
+        receiver: receiver as Address,
+        callbackContract: ethers.ZeroAddress,
+        uiFeeReceiver: uiFees,
+        market: marketTokenAddress,
+        initialCollateralToken: TradeTokensnew.address,
+        swapPath: [],
+      },
+      numbers: {
+        sizeDeltaUsd: expndedDecimals,
+        initialCollateralDeltaAmount: 0n,
+        triggerPrice: 0n,
+        acceptablePrice: numberApiPrice,
+        executionFee: 0n,
+        callbackGasLimit: 0n,
+        minOutputAmount: 0n,
+      },
+      orderType: 2,
+      decreasePositionSwapType: 0,
+      isLong: true,
+      shouldUnwrapNativeToken: false,
+      referralCode: referralCodeDecimals,
+    };
+
+    const pricesParams = {
+      primaryTokens: primaryTokens,
+      primaryPrices: primaryPrices,
+    };
+
+    const simulateCreateSingleMarketOrder = {
+      method: "simulateCreateSingleMarketOrder",
+      params: [orderParams, pricesParams],
+    };
+    const multicall = [sendWnt, sendTokens, simulateCreateSingleMarketOrder];
+    const encodedPayload = multicall
+      .filter(Boolean)
+      .map((call) =>
+        tokenContract.interface.encodeFunctionData(call!.method, call!.params)
+      );
+
+    const dataToDisplay = `
+  🔄 Multicall Data Loaded:
+  
+  - **Market Token Address**: ${marketTokenAddress}
+  - **Trade Amount**: ${tradeAmount}
+  - **Collateral**: ${newCollateral}
+  - **Order Vault**: ${orderVault}
+  - **Receiver**: ${receiver}
+  - **Acceptable Price**: ${numberApiPrice.toString()}
+  - **Primary Tokens**: ${primaryTokens.join(", ")}
+  - **Primary Prices**: ${primaryPrices
+    .map((price) => `min: ${price.min}, max: ${price.max}`)
+    .join("; ")}
+  - **Multicall Methods**: ${multicall.map((call) => call.method).join(", ")}
+  
+  Calling the contract with the above parameters...
+      `;
+
+    await ctx.reply(dataToDisplay);
+
+    await sleep(500);
+
     try {
-      await ctx.reply(`🔄 Preparing to trade ${selectedCoin}...`);
-  
-      const wallet = new ethers.Wallet(userPrivateKeys.get(chatId)!, ethersprovider);
-      const gettokensTokennew = TradeTokens[MOVEMENT_DEVNET];
-      const TradeTokensnew = gettokensTokennew.find((token) => token.symbol === selectedCoin);
-  
-      if (!TradeTokensnew) {
-        throw new Error(`Trade token for ${selectedCoin} not found.`);
-      }
-  
-      const prices = await fetchTokenPrices();
-      const processedData = processPrices(prices);
-      const primaryPrices = processedData.primaryPrices;
-      const primaryTokens = processedData.primaryTokens;
-  
-      const apiPrice = await getPriceForTokenAddress(TradeTokensnew.address);
-      const numberApiPrice = BigInt(apiPrice || "0");
-  
-      if (!apiPrice) {
-        throw new Error(`Max price for token address ${TradeTokensnew.address} not found.`);
-      }
-    
-      const singleMarketOrderHandler = getContracts[MOVEMENT_DEVNET].SingleMarketExchangeRouter;
-      const tokenContract = new ethers.Contract(singleMarketOrderHandler, singleMarketAbi, wallet);
-  
-      // Data for trade
-      const orderVault = getContracts[MOVEMENT_DEVNET].OrderVault;
-      const newCollateral = 5000000n;
-      const tradeAmount = TradeTokensnew.tradeble;
-      const collateral = 5;
-      const collvstradeamount = tradeAmount * collateral;
-      const expndedDecimals = expandDecimals(collvstradeamount, 30);
-      const receiver = wallet.address;
-  
-      // Params data
-      const sendWnt = { method: "sendWnt", params: [orderVault, 0n] };
-      const sendTokens = { method: "sendTokens", params: [TradeTokensnew.address, orderVault, newCollateral] };
-  
-      const orderParams = {
-        addresses: {
-          receiver: receiver as Address,
-          callbackContract: ethers.ZeroAddress,
-          uiFeeReceiver: uiFees,
-          market: TRadeMarket,
-          initialCollateralToken: TradeTokensnew.address,
-          swapPath: []
-        },
-        numbers: {
-          sizeDeltaUsd: expndedDecimals,
-          initialCollateralDeltaAmount: 0n,
-          triggerPrice: 0n,
-          acceptablePrice: numberApiPrice,
-          executionFee: 0n,
-          callbackGasLimit: 0n,
-          minOutputAmount: 0n
-        },
-        orderType: 2,
-        decreasePositionSwapType: 0,
-        isLong: true,
-        shouldUnwrapNativeToken: false,
-        referralCode: referralCodeDecimals
-      };
-  
-      const pricesParams = {
-        primaryTokens: primaryTokens,
-        primaryPrices: primaryPrices
-      };
-  
-      const simulateCreateSingleMarketOrder = { method: "simulateCreateSingleMarketOrder", params: [orderParams, pricesParams] };
-  
-      const multicall = [sendWnt, sendTokens, simulateCreateSingleMarketOrder];
-      const encodedPayload = multicall.filter(Boolean).map((call) => tokenContract.interface.encodeFunctionData(call!.method, call!.params));
-  
-      await ctx.reply("🔄 Multicalling Data loaded");
-  
-      await sleep(500);
-  
-      try {
-        const tx = await tokenContract.multicall(encodedPayload);
-  
-        // Handle multicall transaction status
-        const startTime = Date.now();
-        let txReceipt;
-        let dots = '';
-  
-        while (!txReceipt) {
-          try {
-            txReceipt = await tx.wait();
-          } catch (error) {
-            const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-            dots = '.'.repeat((elapsedTime % 3) + 1);
-  
-            await ctx.reply(
-              `⏳ Waiting for response${dots}\n` +
+      const tx = await tokenContract.multicall(encodedPayload);
+
+      // Handle multicall transaction status
+      const startTime = Date.now();
+      let txReceipt;
+      let dots = "";
+
+      while (!txReceipt) {
+        try {
+          txReceipt = await tx.wait();
+        } catch (error: any) {
+          const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+          dots = ".".repeat((elapsedTime % 3) + 1);
+
+          await ctx.reply(
+            `⏳ Waiting for response${dots}\n` +
               `Time elapsed: ${elapsedTime}s\n` +
               `(Chain may be slow, please be patient)`
+          );
+
+          if (elapsedTime > 80 && elapsedTime % 20 === 0) {
+            await ctx.reply(
+              "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
             );
-  
-            if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-              await ctx.reply("⚠️ Transaction taking longer than usual. Movement RPC might be slow.");
-            }
-  
-            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
           }
+
+          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
         }
-  
-        await ctx.reply("✅ Multicall transaction confirmed! Trades executed successfully!");
-  
-        // Optionally, you can fetch and show the updated trade results or balances here
-  
-      } catch (error: any) {
-        // Handle multicall failure
-        await ctx.reply("❌ Error executing multicall. Please try again later.");
-        console.error(`Error executing multicall: ${error.message}`);
       }
-      
+
+      await ctx.reply(
+        "✅ Multicall transaction confirmed! Trades executed successfully!"
+      );
     } catch (error: any) {
-      await ctx.reply("❌ Error Executing Trade. Please try again later.");
-      console.error(`Error processing trade: ${error.message}`);
+      const errorMessage =
+        error.message || "Error executing multicall. Please try again later.";
+      await ctx.reply(`❌ ${errorMessage}`);
+      console.error(`Error executing multicall: ${errorMessage}`);
     }
+  } catch (error: any) {
+    const errorMessage =
+      error.message || "Error Executing Trade. Please try again later.";
+    await ctx.reply(`❌ ${errorMessage}`);
+    console.error(`Error processing trade: ${errorMessage}`);
   }
-  
-  bot.launch().then(() => {
-    console.log("Bot is up and running");
-  });
-  
-  process.once("SIGINT", () => bot.stop("SIGINT"));
-  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}
+
+bot.launch().then(() => {
+  console.log("Bot is up and running");
+});
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
