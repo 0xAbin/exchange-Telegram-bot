@@ -15,7 +15,6 @@ import {
   getMarketTokenAddress,
   processPrices,
   referralCodeDecimals,
-  TRadeMarket,
   TradeTokens,
   uiFees,
 } from "./lib/token";
@@ -26,7 +25,7 @@ import { tokenabi } from "./utils/abi/tokenabi";
 import { getContracts } from "./lib/contract";
 import { facuetAbi } from "./utils/abi/facuetAbi";
 import { singleMarketAbi } from "./utils/abi/singleMarketAbi";
-import { sleep } from "telegram/Helpers";
+import axios from "axios";
 
 dotenv.config();
 
@@ -37,11 +36,54 @@ let userExpectingKey = new Set<number>();
 let userReadyToTrade = new Set<number>();
 let userSelectedCoin = new Map<number, string>();
 
-function createTradeButtons() {
-  const tradeTokens = TradeTokens[MOVEMENT_DEVNET];
-  return tradeTokens.map((token) => [
-    { text: `Trade ${token.symbol}`, callback_data: `trade_${token.symbol}` },
-  ]);
+// Generic function to handle blockchain interactions
+async function handleBlockchainInteraction(ctx: Context, operation: string, interactionPromise: Promise<any>) {
+  const startTime = Date.now();
+  const updateInterval = 5000; // 5 seconds
+  let dots = "";
+
+  const statusMessage = await ctx.reply(`🕒 ${operation} in progress. Please wait...`);
+
+  const updateStatus = async () => {
+    const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+    dots = ".".repeat((elapsedTime % 3) + 1);
+    await ctx.telegram.editMessageText(
+      ctx.chat!.id,
+      statusMessage.message_id,
+      undefined,
+      `🕒 ${operation} in progress${dots}\n` +
+      `⏱️ Time elapsed: ${elapsedTime}s\n` +
+      `(The blockchain might be slow, please be patient)`
+    );
+
+    if (elapsedTime > 60 && elapsedTime % 30 === 0) {
+      await ctx.reply("⚠️ This is taking longer than usual. The RPC or blockchain might be experiencing delays.");
+    }
+  };
+
+  const statusInterval = setInterval(updateStatus, updateInterval);
+
+  try {
+    const result = await interactionPromise;
+    clearInterval(statusInterval);
+    await ctx.telegram.editMessageText(
+      ctx.chat!.id,
+      statusMessage.message_id,
+      undefined,
+      `✅ ${operation} completed successfully!`
+    );
+    return result;
+  } catch (error: any) {
+    clearInterval(statusInterval);
+    await ctx.telegram.editMessageText(
+      ctx.chat!.id,
+      statusMessage.message_id,
+      undefined,
+      `❌ ${operation} encountered an issue:\n${error.message}\n\nPlease try again later.`
+    );
+    console.error(`Error in ${operation}:`, error);
+    throw error;
+  }
 }
 
 // Handler for /start command
@@ -138,7 +180,7 @@ bot.on("callback_query", async (ctx: Context) => {
     userSelectedCoin.set(chatId, selectedCoin);
     userReadyToTrade.add(chatId);
     await ctx.answerCbQuery(`You selected ${selectedCoin}`);
-    await handleTrade(ctx, chatId);
+    await handleClaim(ctx, chatId);
   } else if (data.startsWith("trade_")) {
     const selectedTradeCoin = data.split("_")[1];
     await ctx.answerCbQuery(`You selected to trade ${selectedTradeCoin}`);
@@ -146,8 +188,7 @@ bot.on("callback_query", async (ctx: Context) => {
   }
 });
 
-// Function to handle trading process
-async function handleTrade(ctx: Context, chatId: number) {
+async function handleClaim(ctx: Context, chatId: number) {
   try {
     const privateKey = userPrivateKeys.get(chatId);
     if (!privateKey) {
@@ -160,7 +201,7 @@ async function handleTrade(ctx: Context, chatId: number) {
     const selectedCoin = userSelectedCoin.get(chatId);
     if (!selectedCoin) {
       await ctx.reply(
-        "❌ No coin selected. Please select a coin before trading."
+        "❌ No coin selected. Please select a coin before claiming."
       );
       return;
     }
@@ -171,7 +212,7 @@ async function handleTrade(ctx: Context, chatId: number) {
     const balance = await getBalance(address);
     if (balance !== null) {
       await ctx.reply(
-        `🔄 Trading in progress\n\nYour balance is: ${balance} Gas ⛽️\n`
+        `🔄 Claim in progress\n\nYour balance is: ${balance} Gas ⛽️\n`
       );
     } else {
       await ctx.reply(
@@ -203,142 +244,77 @@ async function handleTrade(ctx: Context, chatId: number) {
       wallet
     );
 
-    const currentBalance = await publicClient.readContract({
+    const currentTokenBalance = await publicClient.readContract({
       address: ClaimToken.address as Address,
       abi: tokenabi,
       functionName: "balanceOf",
       args: [wallet.address],
     });
 
-    if (typeof currentBalance === "bigint") {
-      const currentBalanceValue = currentBalance as bigint;
-      const currentBalanceInTokens = parseFloat(
-        formatUnits(currentBalanceValue, ClaimToken.decimals)
-      );
-      const claimAmountInTokens = parseFloat(
-        formatUnits(tokenAmount, ClaimToken.decimals)
+    // Cast currentTokenBalance to bigint
+    const tokenBalanceBigInt = currentTokenBalance as bigint;
+
+    if (tokenBalanceBigInt > 0n) {
+      await ctx.reply(
+        `✅ You already have a balance of ${formatBalance(
+          tokenBalanceBigInt,
+          ClaimToken.decimals
+        )} ${ClaimToken.symbol}.\n` +
+        `Proceeding to the next step...`
       );
 
-      if (currentBalanceInTokens >= claimAmountInTokens) {
-        await ctx.reply(
-          "💰 Your wallet already has sufficient tokens. No need to claim more."
-        );
-        await approveAllowance(ctx, chatId, ClaimToken);
-        return;
-      }
-    } else {
-      await ctx.reply(
-        "❌ Error fetching current balance. Please try again later."
-      );
+      // Proceed to the next step, skipping the claim
+      await approveAllowance(ctx, chatId, ClaimToken);
       return;
     }
 
-    // Notify user that the process has started
-    const loadingMessage = await ctx.reply(
-      "🔄 Claiming your tokens...\nPlease wait..."
+    // Proceed with the claim process if no balance exists
+    await handleBlockchainInteraction(
+      ctx,
+      `Claiming collateral token (${ClaimToken.symbol}) to trade with`,
+      faucetContract.claimTokens(ClaimToken.address, tokenAmount)
     );
 
-    try {
-      await ctx.reply(
-        `🪙 Preparing to claim ${ClaimToken.symbol} from Avtius faucet...`
-      );
+    const newBalance = await publicClient.readContract({
+      address: ClaimToken.address as Address,
+      abi: tokenabi,
+      functionName: "balanceOf",
+      args: [wallet.address],
+    });
 
-      // Send transaction
-      const tx = await faucetContract.claimTokens(
-        ClaimToken.address,
-        tokenAmount
-      );
-
-      await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
-
-      const startTime = Date.now();
-      let txReceipt;
-      let dots = "";
-
-      while (!txReceipt) {
-        try {
-          txReceipt = await tx.wait();
-        } catch (error) {
-          const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-          dots = ".".repeat((elapsedTime % 3) + 1);
-
-          await ctx.telegram.editMessageText(
-            chatId,
-            loadingMessage.message_id,
-            undefined,
-            `⏳ Waiting for response${dots}\n` +
-              `Time elapsed: ${elapsedTime}s\n` +
-              `(Chain may be slow, please be patient)`
-          );
-
-          if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-            await ctx.reply(
-              "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
-            );
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-        }
-      }
-
-      // Edit the loading message to indicate success
-      await ctx.telegram.editMessageText(
-        chatId,
-        loadingMessage.message_id,
-        undefined,
-        "✅ Transaction confirmed! Successfully claimed " +
-          ClaimToken.symbol +
-          " from Avtius faucet!"
-      );
-
-      const getBalanceClaimed = await publicClient.readContract({
-        address: ClaimToken.address as Address,
-        abi: tokenabi,
-        functionName: "balanceOf",
-        args: [wallet.address],
-      });
-
-      await ctx.reply(
-        `🎉 Claim successful!\n\n` +
-          `🔍 Your new ${ClaimToken.symbol} balance:\n` +
-          `${formatBalance(getBalanceClaimed as bigint, ClaimToken.decimals)} ${
-            ClaimToken.symbol
-          }\n\n` +
-          `🚀`
-      );
-
-      await approveAllowance(ctx, chatId, ClaimToken);
-    } catch (error: any) {
-      // Edit the loading message to indicate failure
-      await ctx.telegram.editMessageText(
-        chatId,
-        loadingMessage.message_id,
-        undefined,
-        "❌ Error processing faucet claim.\n\n" +
-          "Possible reasons:\n" +
-          "- Network congestion\n" +
-          "- Insufficient gas\n" +
-          "- Contract error\n\n" +
-          "Please try again later or contact support if the issue persists."
-      );
-      console.error(`Error processing faucet claim: ${error.message}`);
-    }
-  } catch (error: any) {
     await ctx.reply(
-      "❌ Error processing trade.\n\n" +
+      `🎉 Claim successful!\n\n` +
+      `🔍 Your new ${ClaimToken.symbol} balance:\n` +
+      `${formatBalance(newBalance as bigint, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
+      `🚀 Ready for the next step!`
+    );
+
+    await ctx.reply(
+      "Currently, we have (coin name) available as a collateral token. We will add more in coming iterations."
+    );
+
+    await approveAllowance(ctx, chatId, ClaimToken);
+
+  } catch (error: any) {
+    if (error.message.includes("Cooldown period has not passed")) {
+      await ctx.reply(
+        `❌ You need to wait for the cooldown period to pass before claiming more ${userSelectedCoin.get(
+          chatId
+        )}.`
+      );
+    } else {
+      await ctx.reply(
+        "❌ Error processing claim.\n\n" +
         "We apologize for the inconvenience. Our team has been notified.\n" +
         "Please try again later or contact support if the issue persists."
-    );
-    console.error(`Error processing trade: ${error.message}`);
+      );
+    }
+    console.error(`Error processing claim: ${error.message}`);
   }
 }
 
 async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
   try {
-    await ctx.reply(
-      `🪙 Preparing to approve ${ClaimToken.symbol} to be spent by the contract...`
-    );
-
     const wallet = new ethers.Wallet(
       userPrivateKeys.get(chatId)!,
       ethersprovider
@@ -363,44 +339,11 @@ async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
       return;
     }
 
-    // Send transaction to approve allowance
-    const approvalAmount = ethers.MaxUint256; // Adjust the amount as needed
-    const tx = await tokenContract.approve(
-      syntheticsRouterAddress,
-      approvalAmount
-    );
-
-    await ctx.reply("📡 Request sent to blockchain. Waiting for response...");
-
-    const startTime = Date.now();
-    let txReceipt;
-    let dots = "";
-
-    while (!txReceipt) {
-      try {
-        txReceipt = await tx.wait();
-      } catch (error) {
-        const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-        dots = ".".repeat((elapsedTime % 3) + 1);
-
-        await ctx.reply(
-          `⏳ Waiting for response${dots}\n` +
-            `Time elapsed: ${elapsedTime}s\n` +
-            `(Chain may be slow, please be patient)`
-        );
-
-        if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-          await ctx.reply(
-            "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
-          );
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-      }
-    }
-
-    await ctx.reply(
-      `✅ Allowance approved successfully for ${ClaimToken.symbol}.`
+    const approvalAmount = ethers.MaxUint256;
+    await handleBlockchainInteraction(
+      ctx,
+      `Approving ${ClaimToken.symbol} allowance`,
+      tokenContract.approve(syntheticsRouterAddress, approvalAmount)
     );
 
     const updatedAllowance = await checkAllowance(
@@ -411,11 +354,9 @@ async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
 
     await ctx.reply(
       `🎉 Allowance updated!\n\n` +
-        `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
-        `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${
-          ClaimToken.symbol
-        }\n\n` +
-        `🚀`
+      `🔍 Your new allowance for ${ClaimToken.symbol}:\n` +
+      `${formatUnits(updatedAllowance, ClaimToken.decimals)} ${ClaimToken.symbol}\n\n` +
+      `🚀 Ready to trade!`
     );
 
     await showTradeOptions(ctx, chatId);
@@ -428,78 +369,126 @@ async function approveAllowance(ctx: Context, chatId: number, ClaimToken: any) {
 }
 
 async function showTradeOptions(ctx: Context, chatId: number) {
+  const tradeTokens = TradeTokens[MOVEMENT_DEVNET];
+  const tradeButtons = tradeTokens.map((token) => [
+    { text: `Trade ${token.symbol}`, callback_data: `trade_${token.symbol}` },
+  ]);
+
   await ctx.reply("🔥 Ready to trade! Select a token to trade:", {
     reply_markup: {
-      inline_keyboard: createTradeButtons(),
+      inline_keyboard: tradeButtons,
     },
   });
 }
 
-async function executeTrade(
-  ctx: Context,
-  chatId: number,
-  selectedCoin: string
-) {
+async function getCurrentTokenPrice(tokenAddress: string): Promise<bigint> {
   try {
-    await ctx.reply(`🔄 Preparing to trade ${selectedCoin}...`);
+    const response = await axios.get("https://api.devnet.avituslabs.xyz/prices/tickers");
+    const tokenData = response.data.find((token: any) => token.tokenAddress.toLowerCase() === tokenAddress.toLowerCase());
+    if (tokenData) {
+      return BigInt(tokenData.minPrice);
+    } else {
+      throw new Error("Token price not found");
+    }
+  } catch (error: any) {
+    console.error(`Error fetching token price: ${error.message}`);
+    throw error;
+  }
+}
 
-    const wallet = new ethers.Wallet(
-      userPrivateKeys.get(chatId)!,
-      ethersprovider
-    );
-    const TradeTokensnew = TradeTokens[MOVEMENT_DEVNET].find(
-      (token) => token.symbol === selectedCoin
+function calculateUsdValue(price: bigint, decimals: number): number {
+  const usdValue = Number(price) / 10 ** (30 - decimals);
+  return usdValue;
+}
+
+async function getUserTokenBalance(wallet: ethers.Wallet, tokenAddress: string, decimals: number): Promise<string> {
+  const tokenContract = new ethers.Contract(tokenAddress, tokenabi, wallet);
+  const balance = await tokenContract.balanceOf(wallet.address);
+  return ethers.formatUnits(balance, decimals);
+}
+
+async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) {
+  try {
+    const wallet = new ethers.Wallet(userPrivateKeys.get(chatId)!, ethersprovider);
+
+    // Get the USDC token details
+    const USDC = FacuetTestToken[MOVEMENT_DEVNET].find(
+      (token) => token.symbol === "USDC"
     );
 
-    if (!TradeTokensnew) {
-      throw new Error(`Trade token for ${selectedCoin} not found.`);
+    if (!USDC) {
+      throw new Error("USDC token not found.");
     }
 
-    const marketTokenAddress = await getMarketTokenAddress(
-      TradeTokensnew.address
+    // Fetch the current price of the selected trade token
+    const currentPriceResponse = await axios.get("https://api.devnet.avituslabs.xyz/prices/tickers");
+    const tokenPriceData = currentPriceResponse.data.find(
+      (token: any) => token.tokenAddress.toLowerCase() === TradeTokens[MOVEMENT_DEVNET].find(
+        (t) => t.symbol === selectedCoin
+      )?.address.toLowerCase()
     );
+
+    if (!tokenPriceData) {
+      throw new Error("Price data not found for the selected token.");
+    }
+
+    const currentPriceBigInt = BigInt(tokenPriceData.minPrice);
+    const currentPriceUsd = calculateUsdValue(currentPriceBigInt, TradeTokens[MOVEMENT_DEVNET].find(
+      (t) => t.symbol === selectedCoin
+    )!.decimals);
+
+    // Get the user's USDC balance
+    const userBalance = await getUserTokenBalance(wallet, USDC.address, USDC.decimals);
+    const userBalanceInUsd = parseFloat(userBalance);
+
+    await ctx.reply(
+      `Your USDC balance:\n` +
+      `${userBalance} USDC\n\n` +
+      `Collateral USDC : (Max: ${userBalance})`
+    );
+
+    // Wait for user input
+    const userInputMsg = await new Promise<any>((resolve) => {
+      bot.on('text', (ctx) => {
+        if (ctx.chat.id === chatId) {
+          resolve(ctx.message);
+        }
+      });
+    });
+
+    const userCollateralAmount = parseFloat(userInputMsg.text);
+
+    // Ensure the user cannot trade more than their balance
+    if (isNaN(userCollateralAmount) || userCollateralAmount <= 0 || userCollateralAmount > userBalanceInUsd) {
+      throw new Error(`Invalid amount. Please enter a number between 1 and ${userBalance}.`);
+    }
+
+    // Convert the user's collateral amount to BigInt
+    const tradeAmountBigInt = expandDecimals(userCollateralAmount, USDC.decimals);
+
+    // Calculate sizeDeltaUsd
+    const sizeDeltaUsd = tradeAmountBigInt * currentPriceBigInt / BigInt(10 ** USDC.decimals);
+
+    // Get the market token address for the selected trade token
+    const marketTokenAddress = await getMarketTokenAddress(TradeTokens[MOVEMENT_DEVNET].find(
+      (t) => t.symbol === selectedCoin
+    )!.address);
 
     if (!marketTokenAddress) {
       await ctx.reply(`❌ Market for ${selectedCoin} not found.`);
       return;
     }
 
-    const prices = await fetchTokenPrices();
-    const processedData = processPrices(prices);
-    const primaryPrices = processedData.primaryPrices;
-    const primaryTokens = processedData.primaryTokens;
+    const singleMarketOrderHandler = getContracts[MOVEMENT_DEVNET].SingleMarketExchangeRouter;
+    const tokenContract = new ethers.Contract(singleMarketOrderHandler, singleMarketAbi, wallet);
 
-    const apiPrice = await getPriceForTokenAddress(TradeTokensnew.address);
-    const numberApiPrice = BigInt(apiPrice || "0");
-
-    if (!apiPrice) {
-      throw new Error(
-        `Max price for token address ${TradeTokensnew.address} not found.`
-      );
-    }
-
-    const singleMarketOrderHandler =
-      getContracts[MOVEMENT_DEVNET].SingleMarketExchangeRouter;
-    const tokenContract = new ethers.Contract(
-      singleMarketOrderHandler,
-      singleMarketAbi,
-      wallet
-    );
-
-    // Data for trade
     const orderVault = getContracts[MOVEMENT_DEVNET].OrderVault;
-    const newCollateral = 5000000n;
-    const tradeAmount = TradeTokensnew.tradeble;
-    const collateral = 5;
-    const collvstradeamount = tradeAmount * collateral;
-    const expndedDecimals = expandDecimals(collvstradeamount, 30);
     const receiver = wallet.address;
 
-    // Params data
     const sendWnt = { method: "sendWnt", params: [orderVault, 0n] };
     const sendTokens = {
       method: "sendTokens",
-      params: [TradeTokensnew.address, orderVault, newCollateral],
+      params: [USDC.address, orderVault, tradeAmountBigInt],
     };
 
     const orderParams = {
@@ -508,14 +497,14 @@ async function executeTrade(
         callbackContract: ethers.ZeroAddress,
         uiFeeReceiver: uiFees,
         market: marketTokenAddress,
-        initialCollateralToken: TradeTokensnew.address,
+        initialCollateralToken: USDC.address, // Use USDC as collateral
         swapPath: [],
       },
       numbers: {
-        sizeDeltaUsd: expndedDecimals,
+        sizeDeltaUsd: sizeDeltaUsd,
         initialCollateralDeltaAmount: 0n,
         triggerPrice: 0n,
-        acceptablePrice: numberApiPrice,
+        acceptablePrice: currentPriceBigInt,
         executionFee: 0n,
         callbackGasLimit: 0n,
         minOutputAmount: 0n,
@@ -527,6 +516,11 @@ async function executeTrade(
       referralCode: referralCodeDecimals,
     };
 
+    const prices = await fetchTokenPrices();
+    const processedData = processPrices(prices);
+    const primaryPrices = processedData.primaryPrices;
+    const primaryTokens = processedData.primaryTokens;
+
     const pricesParams = {
       primaryTokens: primaryTokens,
       primaryPrices: primaryPrices,
@@ -537,6 +531,9 @@ async function executeTrade(
       params: [orderParams, pricesParams],
     };
     const multicall = [sendWnt, sendTokens, simulateCreateSingleMarketOrder];
+
+    console.log("Multicall Array:", multicall);
+
     const encodedPayload = multicall
       .filter(Boolean)
       .map((call) =>
@@ -544,78 +541,89 @@ async function executeTrade(
       );
 
     const dataToDisplay = `
-  🔄 Multicall Data Loaded:
-  
-  - **Market Token Address**: ${marketTokenAddress}
-  - **Trade Amount**: ${tradeAmount}
-  - **Collateral**: ${newCollateral}
-  - **Order Vault**: ${orderVault}
-  - **Receiver**: ${receiver}
-  - **Acceptable Price**: ${numberApiPrice.toString()}
-  - **Primary Tokens**: ${primaryTokens.join(", ")}
-  - **Primary Prices**: ${primaryPrices
-    .map((price) => `min: ${price.min}, max: ${price.max}`)
-    .join("; ")}
-  - **Multicall Methods**: ${multicall.map((call) => call.method).join(", ")}
-  
-  Calling the contract with the above parameters...
-      `;
+🔄 Trade Details:
+
+- Market: ${selectedCoin}
+- Trade Amount: ${userCollateralAmount} USDC
+- Current Price: ${currentPriceUsd.toFixed(2)} USD
+- Size Delta USD: ${ethers.formatUnits(sizeDeltaUsd, USDC.decimals)} USD
+- Direction: Long
+
+Executing trade...
+    `;
 
     await ctx.reply(dataToDisplay);
 
-    await sleep(500);
+    await handleBlockchainInteraction(
+      ctx,
+      `Executing ${selectedCoin} trade`,
+      tokenContract.multicall(encodedPayload)
+    );
 
-    try {
-      const tx = await tokenContract.multicall(encodedPayload);
+    await ctx.reply(
+      "✅ Trade executed successfully!\n\n" +
+      "🔍 You can check your position in the Avtius dashboard.\n" +
+      "🚀 What would you like to do next?"
+    );
 
-      // Handle multicall transaction status
-      const startTime = Date.now();
-      let txReceipt;
-      let dots = "";
-
-      while (!txReceipt) {
-        try {
-          txReceipt = await tx.wait();
-        } catch (error: any) {
-          const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
-          dots = ".".repeat((elapsedTime % 3) + 1);
-
-          await ctx.reply(
-            `⏳ Waiting for response${dots}\n` +
-              `Time elapsed: ${elapsedTime}s\n` +
-              `(Chain may be slow, please be patient)`
-          );
-
-          if (elapsedTime > 80 && elapsedTime % 20 === 0) {
-            await ctx.reply(
-              "⚠️ Transaction taking longer than usual. Movement RPC might be slow."
-            );
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
-        }
+    // Offer next steps to the user
+    await ctx.reply("Choose your next action:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📊 View Portfolio", callback_data: "view_portfolio" }],
+          [{ text: "🔄 Trade Again", callback_data: "trade_again" }],
+          [{ text: "❓ Get Help", callback_data: "get_help" }]
+        ]
       }
+    });
 
-      await ctx.reply(
-        "✅ Multicall transaction confirmed! Trades executed successfully!"
-      );
-    } catch (error: any) {
-      const errorMessage =
-        error.message || "Error executing multicall. Please try again later.";
-      await ctx.reply(`❌ ${errorMessage}`);
-      console.error(`Error executing multicall: ${errorMessage}`);
-    }
   } catch (error: any) {
-    const errorMessage =
-      error.message || "Error Executing Trade. Please try again later.";
-    await ctx.reply(`❌ ${errorMessage}`);
+    const errorMessage = error.message || "Error executing trade. Please try again later.";
+    await ctx.reply(`❌ Error: ${errorMessage}\n\nIf this persists, please contact support.`);
     console.error(`Error processing trade: ${errorMessage}`);
   }
 }
 
+// Additional handlers for the new callback queries
+bot.action('view_portfolio', async (ctx) => {
+  // Implement portfolio view logic here
+  await ctx.answerCbQuery();
+  await ctx.reply("Portfolio view is not yet implemented. Check back soon!");
+});
+
+bot.action('trade_again', async (ctx) => {
+  await ctx.answerCbQuery();
+  await showTradeOptions(ctx, ctx.chat!.id);
+});
+
+bot.action('get_help', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    "Need help? Here are some resources:\n\n" +
+    "📚 User Guide: [link to user guide]\n" +
+    "🆘 Support Channel: @AvtiusSupportChannel\n" +
+    "❓ FAQ: [link to FAQ page]\n\n" +
+    "If you need further assistance, please contact our support team."
+  );
+});
+
+// Error handling
+bot.catch((err, ctx) => {
+  console.error(`Error while handling update ${ctx.update.update_id}:`, err);
+  ctx.reply("An unexpected error occurred. Our team has been notified. Please try again later.");
+});
+
+// Start the bot
 bot.launch().then(() => {
   console.log("Bot is up and running");
 });
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Optionally, send an error report to your logging service
+});

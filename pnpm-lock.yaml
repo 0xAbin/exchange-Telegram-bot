@@ -23,6 +23,9 @@ importers:
       node-telegram-bot-api:
         specifier: ^0.66.0
         version: 0.66.0(request@2.88.2)
+      p-timeout:
+        specifier: ^6.1.2
+        version: 6.1.2
       telegraf:
         specifier: ^4.16.3
         version: 4.16.3
@@ -36,6 +39,9 @@ importers:
       '@types/node':
         specifier: ^22.5.0
         version: 22.5.0
+      '@types/p-timeout':
+        specifier: ^1.2.2
+        version: 1.2.2
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.5.0)(typescript@5.5.4)
@@ -121,6 +127,10 @@ packages:
 
   '@types/node@22.5.0':
     resolution: {integrity: sha512-DkFrJOe+rfdHTqqMg0bSNlGlQ85hSoh2TPzZyhHsXnMtligRWpxUySiyw8FY14ITt24HVCiQPWxS3KO/QlGmWg==}
+
+  '@types/p-timeout@1.2.2':
+    resolution: {integrity: sha512-F4aG8Vq5ZchL1ZCeJY2kop8j+evKNPE08ZYK1xNP79tpnydTpNuZ2gOpDEcyWGaq76XT33y4387UKyFcU7EWag==}
+    deprecated: This is a stub types definition. p-timeout provides its own type definitions, so you do not need this installed.
 
   abitype@1.0.5:
     resolution: {integrity: sha512-YzDhti7cjlfaBhHutMaboYB21Ha3rXR9QTkNJFzYC4kC8YclaiwPBBBJY8ejFdu2wnJeZCVZSMlQJ7fi8S6hsw==}
@@ -774,6 +784,10 @@ packages:
     resolution: {integrity: sha512-+/wmHtzJuWii1sXn3HCuH/FTwGhrp4tmJTxSKJbfS+vkipci6osxXM5mY0jUiRzWKMTgUT8l7HFbeSwZAynqHw==}
     engines: {node: '>=10'}
 
+  p-timeout@6.1.2:
+    resolution: {integrity: sha512-UbD77BuZ9Bc9aABo74gfXhNvzC9Tx7SxtHSh1fxvx3jTLLYvmVhiQZZrJzqqU0jKbN32kb5VOKiLEQI/3bIjgQ==}
+    engines: {node: '>=14.16'}
+
   pako@2.1.0:
     resolution: {integrity: sha512-w+eufiZ1WuJYgPXbV/PO3NCMEc3xqylkKHzp8bxp1uW4qaSNQUkwmLLEc3kKsfz8lpV1F8Ht3U1Cm+9Srog2ug==}
 
@@ -1206,6 +1220,10 @@ snapshots:
   '@types/node@22.5.0':
     dependencies:
       undici-types: 6.19.8
+
+  '@types/p-timeout@1.2.2':
+    dependencies:
+      p-timeout: 6.1.2
 
   abitype@1.0.5(typescript@5.5.4):
     optionalDependencies:
@@ -1915,6 +1933,8 @@ snapshots:
   onetime@1.1.0: {}
 
   p-timeout@4.1.0: {}
+
+  p-timeout@6.1.2: {}
 
   pako@2.1.0: {}
 

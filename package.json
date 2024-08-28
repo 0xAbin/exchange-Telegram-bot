@@ -18,12 +18,14 @@
     "ethers": "^6.13.2",
     "input": "^1.0.1",
     "node-telegram-bot-api": "^0.66.0",
+    "p-timeout": "^6.1.2",
     "telegraf": "^4.16.3",
     "telegram": "^2.24.11",
     "viem": "^2.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
+    "@types/p-timeout": "^1.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
   }

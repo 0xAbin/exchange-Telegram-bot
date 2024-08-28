@@ -5,13 +5,13 @@ import axios from "axios";
 
 export const FacuetTestToken = {
     [MOVEMENT_DEVNET]: [
-        {
-            name: "WSTETH",
-            address: "0xeAC3d56DCB15a3Bc174aB292B7023e9Fc9F7aDf0",
-            symbol: "WSTETH",
-            decimals: 18,
-            claimable: 0.01,
-        },
+        // {
+        //     name: "WSTETH",
+        //     address: "0xeAC3d56DCB15a3Bc174aB292B7023e9Fc9F7aDf0",
+        //     symbol: "WSTETH",
+        //     decimals: 18,
+        //     claimable: 0.01,
+        // },
         {
             name: "USDC Coin",
             address: "0x38604D543659121faa8F68A91A5b633C7BFE9761",
@@ -19,27 +19,27 @@ export const FacuetTestToken = {
             decimals: 6,
             claimable: 100,
         },
-        {
-          name: "Milkway Staked TIA",
-          address: "0x2A197C29f3E144387EB5877CFe0e63032FD1a0DA",
-          symbol: "MILKTIA",
-          decimals: 18,
-          claimable: 20,
-      },
-      {
-          name: "Staked Move",
-          address: "0x1AD94D0a799664D459cB467655eC0EA4cc8Ad478",
-          symbol: "STMOVE",
-          decimals: 18,
-          claimable: 10,
-      },
-      {
-          name: "GoGoPool AVAX",
-          address: "0xb9aDf17948481eb380D37E9594fD4382372DBcd0",
-          symbol: "GGAVAX",
-          decimals: 18,
-          claimable: 10,
-      },
+      //   {
+      //     name: "Milkway Staked TIA",
+      //     address: "0x2A197C29f3E144387EB5877CFe0e63032FD1a0DA",
+      //     symbol: "MILKTIA",
+      //     decimals: 18,
+      //     claimable: 20,
+      // },
+      // {
+      //     name: "Staked Move",
+      //     address: "0x1AD94D0a799664D459cB467655eC0EA4cc8Ad478",
+      //     symbol: "STMOVE",
+      //     decimals: 18,
+      //     claimable: 10,
+      // },
+      // {
+      //     name: "GoGoPool AVAX",
+      //     address: "0xb9aDf17948481eb380D37E9594fD4382372DBcd0",
+      //     symbol: "GGAVAX",
+      //     decimals: 18,
+      //     claimable: 10,
+      // },
     ]
 };
 
@@ -50,32 +50,36 @@ export const TradeTokens ={
             address: "0xeAC3d56DCB15a3Bc174aB292B7023e9Fc9F7aDf0",
             symbol: "WSTETH",
             decimals: 18,
-            claimable: 0.01,
-            tradeble : 0.01,
+          },
+          {
+            name: "Wrapped Bitcoin",
+            symbol: "WBTC",
+            address: "0xEb3c2e768c17E0c2AFF98bdF0024D38A18b0B62E",
+            decimals: 8,
+          },
+          {
+            name: "Wrapped Ether",
+            symbol: "WETH",
+            decimals: 18,
+            address: "0xd778B815E6AE26f547042bbbe4Bf8b1B0c746A22",
           },
           {
             name: "Milkway Staked TIA",
             address: "0x2A197C29f3E144387EB5877CFe0e63032FD1a0DA",
             symbol: "MILKTIA",
             decimals: 18,
-            claimable: 20,
-            tradeble : 1,
         },
         {
             name: "Staked Move",
             address: "0x1AD94D0a799664D459cB467655eC0EA4cc8Ad478",
             symbol: "STMOVE",
             decimals: 18,
-            claimable: 10,
-            tradeble : 5,
         },
         {
             name: "GoGoPool AVAX",
             address: "0xb9aDf17948481eb380D37E9594fD4382372DBcd0",
             symbol: "GGAVAX",
             decimals: 18,
-            claimable: 10,
-            tradeble : 2,
         },
     ]
 }
@@ -90,6 +94,8 @@ export const fetchTokenPrices = async () => {
     throw error;
   }
 };
+
+
 
 
 export const TRadeMarket = "0x3A7315a05Bfca36CD309266F99028cF80AD6b1C6"
