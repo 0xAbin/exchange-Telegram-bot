@@ -36,10 +36,11 @@ let userExpectingKey = new Set<number>();
 let userReadyToTrade = new Set<number>();
 let userSelectedCoin = new Map<number, string>();
 
-// Generic function to handle blockchain interactions
+// Generic function to handle blockchain interactions with improved error handling
 async function handleBlockchainInteraction(ctx: Context, operation: string, interactionPromise: Promise<any>) {
   const startTime = Date.now();
   const updateInterval = 5000; // 5 seconds
+  const maxWaitTime = 180000; // 3 minutes
   let dots = "";
 
   const statusMessage = await ctx.reply(`🕒 ${operation} in progress. Please wait...`);
@@ -57,14 +58,18 @@ async function handleBlockchainInteraction(ctx: Context, operation: string, inte
     );
 
     if (elapsedTime > 60 && elapsedTime % 30 === 0) {
-      await ctx.reply("⚠️ This is taking longer than usual. The RPC or blockchain might be experiencing delays.");
+      await ctx.reply("⚠️ This is taking longer than usual. The network might be congested. Please continue to wait.");
     }
   };
 
   const statusInterval = setInterval(updateStatus, updateInterval);
 
   try {
-    const result = await interactionPromise;
+    const result = await Promise.race([
+      interactionPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Operation timed out")), maxWaitTime))
+    ]);
+
     clearInterval(statusInterval);
     await ctx.telegram.editMessageText(
       ctx.chat!.id,
@@ -72,6 +77,16 @@ async function handleBlockchainInteraction(ctx: Context, operation: string, inte
       undefined,
       `✅ ${operation} completed successfully!`
     );
+
+    // Additional confirmation message
+    await ctx.reply(
+      `🎉 Transaction Confirmed! 🎉\n\n` +
+      `Operation: ${operation}\n` +
+      `Status: Successful\n` +
+      `Time taken: ${Math.floor((Date.now() - startTime) / 1000)}s\n\n` +
+      `Your transaction has been successfully processed and confirmed on the blockchain. You can now proceed with your next action.`
+    );
+
     return result;
   } catch (error: any) {
     clearInterval(statusInterval);
@@ -92,15 +107,18 @@ bot.start((ctx) => {
   if (chatId) {
     const welcomeMessage =
       "🚀 Welcome to the Avtius Trading Bot! 🤖\n\n" +
-      "1. Create a new Ethereum wallet.\n" +
-      "2. Enter your private key below.\n" +
-      "3. Ensure you're connected to Galxe.\n\n" +
-      "✨ Type your private key to continue.\n\n" +
-      "🔑 Your private key should start with '0x' and be 64 characters long:\n\n" +
-      "0x7db22a0839.......\n\n" +
-      "💡 Example: 0x7db22a0839abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      "Here's how to get started:\n\n" +
+      "1️⃣ Create a new wallet or use an existing one.\n" +
+      "2️⃣ Enter your private key below.\n" +
+      "3️⃣ Ensure your wallet is linked with Galxe.\n\n" +
+      "✨ To begin, please type your private key.\n\n" +
+      "🔑 Your private key should:\n" +
+      "   • Start with '0x'\n" +
+      "   • Be 64 characters long\n\n" +
+      "💡 Example: \n0x7db22a0839.......\n\n" +
+      "🛡️ Remember: Never share your private key with anyone else!";
 
-    ctx.reply(welcomeMessage);
+    ctx.reply(welcomeMessage, { parse_mode: 'Markdown' });
     userExpectingKey.add(chatId);
   }
 });
@@ -138,11 +156,12 @@ bot.on("text", async (ctx) => {
         ]);
 
         await ctx.reply(
-          "🔑 **Private Key Received!**\n\n" +
-            "✨ Your account details:\n" +
-            `📬 Address: ${account.address}\n\n` +
-            "Please select a coin to claim:",
+          "🔑 *Private Key Received!*\n\n" +
+          "✨ Your account details:\n" +
+          `📬 Address: \`${account.address}\`\n\n` +
+          "Please select a coin to claim:",
           {
+            parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: coinButtons,
             },
@@ -158,7 +177,10 @@ bot.on("text", async (ctx) => {
       }
     } else {
       await ctx.reply(
-        '🚫 The private key should start with "0x" and be exactly 64 characters long (including "0x"). Please provide a valid private key.'
+        '🚫 Invalid private key format. Remember:\n' +
+        '• It should start with "0x"\n' +
+        '• It should be exactly 64 characters long (including "0x")\n\n' +
+        'Please provide a valid private key.'
       );
     }
   }
@@ -444,7 +466,8 @@ async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) 
     await ctx.reply(
       `Your USDC balance:\n` +
       `${userBalance} USDC\n\n` +
-      `Collateral USDC : (Max: ${userBalance})`
+      `Collateral USDC : (Max: ${userBalance})\n` + 
+      `Enter the amount of USDC you want to trade:`
     );
 
     // Wait for user input
@@ -463,11 +486,10 @@ async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) 
       throw new Error(`Invalid amount. Please enter a number between 1 and ${userBalance}.`);
     }
 
-    // Convert the user's collateral amount to BigInt
-    const tradeAmountBigInt = expandDecimals(userCollateralAmount, USDC.decimals);
+    const collateralUint = BigInt(userCollateralAmount);
 
-    // Calculate sizeDeltaUsd
-    const sizeDeltaUsd = tradeAmountBigInt * currentPriceBigInt / BigInt(10 ** USDC.decimals);
+    // Convert the user's collateral amount to BigInt
+    const tradeAmountBigInt = expandDecimals(userCollateralAmount, 30);
 
     // Get the market token address for the selected trade token
     const marketTokenAddress = await getMarketTokenAddress(TradeTokens[MOVEMENT_DEVNET].find(
@@ -488,7 +510,7 @@ async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) 
     const sendWnt = { method: "sendWnt", params: [orderVault, 0n] };
     const sendTokens = {
       method: "sendTokens",
-      params: [USDC.address, orderVault, tradeAmountBigInt],
+      params: [USDC.address, orderVault, collateralUint],
     };
 
     const orderParams = {
@@ -497,11 +519,11 @@ async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) 
         callbackContract: ethers.ZeroAddress,
         uiFeeReceiver: uiFees,
         market: marketTokenAddress,
-        initialCollateralToken: USDC.address, // Use USDC as collateral
+        initialCollateralToken: USDC.address, 
         swapPath: [],
       },
       numbers: {
-        sizeDeltaUsd: sizeDeltaUsd,
+        sizeDeltaUsd: tradeAmountBigInt,
         initialCollateralDeltaAmount: 0n,
         triggerPrice: 0n,
         acceptablePrice: currentPriceBigInt,
@@ -541,52 +563,62 @@ async function executeTrade(ctx: Context, chatId: number, selectedCoin: string) 
       );
 
     const dataToDisplay = `
-🔄 Trade Details:
+🔄 *Trade Details:*
 
-- Market: ${selectedCoin}
-- Trade Amount: ${userCollateralAmount} USDC
-- Current Price: ${currentPriceUsd.toFixed(2)} USD
-- Size Delta USD: ${ethers.formatUnits(sizeDeltaUsd, USDC.decimals)} USD
-- Direction: Long
+📊 *Market:* ${selectedCoin}
+💰 *Trade Amount:* ${userCollateralAmount} USDC
+💹 *Current Price:* ${currentPriceUsd.toFixed(2)} USD
+📈 *Size Delta USD:* ${ethers.formatUnits(tradeAmountBigInt, 30)} USD
+📢 *Direction:* Long
 
-Executing trade...
+_Executing trade..._
     `;
 
-    await ctx.reply(dataToDisplay);
+    await ctx.replyWithMarkdown(dataToDisplay);
 
-    await handleBlockchainInteraction(
+    const tradeResult = await handleBlockchainInteraction(
       ctx,
       `Executing ${selectedCoin} trade`,
       tokenContract.multicall(encodedPayload)
     );
 
-    await ctx.reply(
-      "✅ Trade executed successfully!\n\n" +
-      "🔍 You can check your position in the Avtius dashboard.\n" +
-      "🚀 What would you like to do next?"
-    );
+    if (tradeResult && tradeResult.hash) {
+      const successMessage = `
+✅ *Trade executed successfully!*
 
-    // Offer next steps to the user
-    await ctx.reply("Choose your next action:", {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📊 View Portfolio", callback_data: "view_portfolio" }],
-          [{ text: "🔄 Trade Again", callback_data: "trade_again" }],
-          [{ text: "❓ Get Help", callback_data: "get_help" }]
-        ]
-      }
-    });
+🔗 *Transaction Hash:* \`${tradeResult.hash}\`
+🔍 You can check your position in the Avtius dashboard.
+🚀 What would you like to do next?
+      `;
+
+      await ctx.replyWithMarkdown(successMessage, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📊 View Portfolio", callback_data: "view_portfolio" }],
+            [{ text: "🔄 Trade Again", callback_data: "trade_again" }],
+            [{ text: "❓ Get Help", callback_data: "get_help" }]
+          ]
+        }
+      });
+    } else {
+      throw new Error("Transaction failed or returned unexpected result");
+    }
 
   } catch (error: any) {
-    const errorMessage = error.message || "Error executing trade. Please try again later.";
-    await ctx.reply(`❌ Error: ${errorMessage}\n\nIf this persists, please contact support.`);
-    console.error(`Error processing trade: ${errorMessage}`);
+    const errorMessage = `
+❌ *Error executing trade*
+
+${error.message || "An unexpected error occurred"}
+
+If this issue persists, please contact our support team.
+    `;
+    await ctx.replyWithMarkdown(errorMessage);
+    console.error(`Error processing trade:`, error);
   }
 }
 
 // Additional handlers for the new callback queries
 bot.action('view_portfolio', async (ctx) => {
-  // Implement portfolio view logic here
   await ctx.answerCbQuery();
   await ctx.reply("Portfolio view is not yet implemented. Check back soon!");
 });
@@ -608,9 +640,17 @@ bot.action('get_help', async (ctx) => {
 });
 
 // Error handling
-bot.catch((err, ctx) => {
+bot.catch((err : any, ctx) => {
   console.error(`Error while handling update ${ctx.update.update_id}:`, err);
-  ctx.reply("An unexpected error occurred. Our team has been notified. Please try again later.");
+  ctx.replyWithMarkdown(`
+⚠️ *An unexpected error occurred*
+
+We apologize for the inconvenience. Our team has been notified.
+
+Please try again later or contact our support team if the issue persists.
+
+*Error details:* \`${err.message}\`
+  `);
 });
 
 // Start the bot
